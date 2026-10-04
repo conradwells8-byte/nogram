@@ -4,10 +4,14 @@ Instagram on the web (iPhone Safari), minus Reels browsing.
 
 - The Reels button is gone, and `/reels/` sends you home.
 - A reel someone sends you in DMs still opens and plays.
-- Swiping on to the next reel doesn't work. You get sent back to where you opened it from.
+- While a reel (or any full-screen video) is playing, you can't scroll or swipe up or down at all. Watch it, then go back.
 - Explore is blocked too (optional, on by default). The Explore button takes you straight to Search instead.
+- **Time limits** (all optional, on by default):
+  - a 10-second countdown before Instagram appears,
+  - a small timer at the top showing this sitting and today's total,
+  - a "Time's up" screen after 30 minutes in one sitting.
 
-Everything else (feed, stories, profiles, posts, DMs, search, notifications) is untouched. It's one userscript, [`instagram-no-reels.user.js`](instagram-no-reels.user.js), with no network requests, no libraries and no analytics. The only thing it stores is the ID of the reel you're currently watching, in `sessionStorage`, and that's gone when the tab closes.
+Everything else (feed, stories, profiles, posts, DMs, search, notifications) is untouched. It's one userscript, [`instagram-no-reels.user.js`](instagram-no-reels.user.js), with no network requests, no libraries and no analytics. It stores two things, both only on your device: the ID of the reel you're currently watching (`sessionStorage`, gone when the tab closes) and your time on Instagram (`localStorage`, see [Time limits](#time-limits)).
 
 **Install link (open this on the iPhone in Safari):**
 https://raw.githubusercontent.com/conradwells8-byte/nogram/main/instagram-no-reels.user.js
@@ -30,6 +34,30 @@ Safari extensions may **not** run when instagram.com is saved to the Home Screen
 
 ---
 
+## Time limits
+
+These work in "sittings". A sitting starts when you open Instagram. It ends once Instagram has been off screen (another app, another tab, phone locked) for **5 minutes**.
+
+- **Countdown.** At the start of each sitting, a black screen counts down from 10 before Instagram appears. Videos stay paused behind it. Reloading the page or coming back within 5 minutes doesn't trigger it again.
+- **Timer.** A small pill at the top shows `12:34 · 1h 05m today`: time in this sitting, then total time today. It turns amber in the last 5 minutes before the limit. Only on-screen time counts, and the countdown doesn't.
+- **Time's up.** After 30 minutes in one sitting, a "Time's up" screen covers Instagram and pauses video. Reloading doesn't get round it. It lifts once you've stayed away for 5 minutes, and then you get a new sitting with a fresh countdown.
+
+All the numbers are in `CONFIG.TIME` at the top of the script:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ENABLED` | `true` | Turns the whole time-limits feature on or off |
+| `GATE_SECONDS` | `10` | Countdown length (`0` = no countdown) |
+| `SESSION_LIMIT_MIN` | `30` | Minutes per sitting before "Time's up" (`0` = no limit) |
+| `NEW_SITTING_AFTER_AWAY_MIN` | `5` | How long away counts as a new sitting. Also how long "Time's up" lasts. |
+| `SHOW_TIMER` | `true` | Show the timer pill |
+| `WARN_LAST_MIN` | `5` | When the timer turns amber |
+| `TIMER_CSS` | top centre | Where the pill sits (plain CSS) |
+
+The times are saved in `localStorage` on instagram.com (key `nogram.time`), so they survive closing the tab. They never leave your device. Instagram's own code could technically read that key, but it only holds timings, which Instagram already knows. Each browser keeps its own count, so Safari on iPhone and Arc on the Mac are tracked separately.
+
+---
+
 ## Updating
 
 The loop is: **edit in VS Code → test on desktop → `npm run release` → update on the phone.**
@@ -44,7 +72,7 @@ Run the automated tests first. They check the script against a small fake Instag
 
 ```sh
 npm install                      # once
-npx playwright install webkit    # once
+npx playwright install webkit chromium   # once
 npm test
 ```
 
@@ -110,11 +138,15 @@ Run through this after every change, on desktop (iPhone viewport) and then on th
 - [ ] **Reels nav button is gone** from the bottom bar, and it doesn't flash on screen while the page loads.
 - [ ] **`/reels/` redirects home.** Type `instagram.com/reels/` in the address bar and you should land on the feed. Press Back: you should *not* return to `/reels/`.
 - [ ] **A DM'd reel plays.** Open a DM thread with a reel in it, tap the reel, and it opens and plays.
-- [ ] **A swipe to the next reel is blocked.** In that reel, try to swipe up or scroll to the next one. Either nothing moves, or you're sent straight back to the DM thread.
+- [ ] **No scrolling in a reel.** In that reel, try to swipe up, swipe down, and scroll to the next one. Nothing should move. Tapping (pause, mute, like) still works, and so does going back.
+- [ ] **Comments still scroll** if you open a reel's comments.
 - [ ] **Back to DMs, then a second reel works.** From the DM thread, open a *different* reel. It opens and plays.
 - [ ] **Explore is blocked** (if `BLOCK_EXPLORE` is on). Tapping the Explore/search button lands on the search page, not the Explore grid. Searching for an account still works.
 - [ ] **Feed, stories and DMs are unaffected.** Scroll the feed, watch a few stories, send a message.
 - [ ] **Profiles are unaffected**, including a profile's own Reels tab (single reels from there open like DM reels).
+- [ ] **Countdown** shows when you open Instagram fresh, but not when you reload straight away.
+- [ ] **Timer** pill is visible at the top and counting. It doesn't cover anything you need to tap.
+- [ ] **Time's up** appears at the limit. To test without waiting 30 minutes, set `SESSION_LIMIT_MIN: 1` on desktop.
 
 ---
 
@@ -128,7 +160,10 @@ Instagram changes its markup regularly. Symptoms and fixes:
 | `/reels/` no longer redirects, or redirects too much | Reels URLs changed | `PATHS.REELS_FEED`, `PATHS.REELS_FEED_ROOT`, `PATHS.REELS_FEED_WITH_ID` |
 | DM reels won't open, or swipes aren't caught | Single-reel URL changed | `PATHS.SINGLE_REEL` |
 | Search broken | Search moved | `REDIRECT_EXPLORE`, `PATHS.EXPLORE_ALLOWED` (or set `BLOCK_EXPLORE: false`) |
-| Can't scroll comments on a reel | Comment sheet isn't a `role="dialog"` any more | `SCROLL_LOCK_EXEMPT` |
+| A reel still scrolls | Reel video is smaller than expected, or inside an `<article>` | Lower `VIEWER_VIDEO_MIN_HEIGHT` (e.g. `0.6`), or change `FEED_POST_SELECTOR` |
+| Feed won't scroll over a video | A feed video is being mistaken for a reel | Raise `VIEWER_VIDEO_MIN_HEIGHT`, or check `FEED_POST_SELECTOR` still matches feed posts |
+| Can't scroll something inside a reel | It needs to be exempt from the video lock | Add a selector for it to `VIDEO_LOCK_EXEMPT` |
+| Timer covers a button | Instagram's header changed | `TIME.TIMER_CSS` (e.g. move it to `bottom: 70px`) |
 | A swipe flashes the next reel for too long | Detection is slow | Lower `POLL_MS` (e.g. `100`) |
 
 **How to see what changed:**
@@ -144,13 +179,19 @@ Instagram changes its markup regularly. Symptoms and fixes:
 
 ## How it works
 
-Five layers, from fastest to most thorough:
+Six layers:
 
 1. **CSS at `document-start`** hides the bare Reels feed link (`a[href="/reels/"]` and variants) before the page can paint it.
 2. **A `MutationObserver`** re-applies the hiding (and an `aria-label="Reels"` fallback) every time Instagram re-renders, batched to once per animation frame. The same pass also sets `display: none` inline via script, which works even if a Content Security Policy were ever to block the `<style>` tag.
 3. **A route guard** runs on every URL change. It watches for changes four ways: wrapped `history.pushState` / `replaceState`, `popstate`, the DOM observer, and a 250 ms poll of `location.pathname`. A single-reel URL (`/reel/<id>/`) is allowed only if the previous route was *not* a reel. A reel-to-different-reel change counts as a swipe. Blocked routes use `location.replace`, so Back doesn't return to them.
 4. **A click guard** (capture phase, on `window`) stops taps on blocked links before Instagram's router sees them. That means no flash of Explore, and a "next reel" link simply does nothing.
-5. **A scroll lock** on single-reel pages: `overflow: hidden` and `overscroll-behavior: none`, plus blocking vertical `touchmove`, `wheel` and arrow / Page Up / Page Down keys. Dialogs (the comment sheet) and text inputs are exempt. This is a second layer; the route guard is the real defence.
+5. **A video lock.** It's based on what's on screen, not the URL. It applies on `/reel/` pages and whenever a video taller than 75% of the screen is showing that isn't inside a feed post (`<article>`). That covers reels that open as a pop-up over DMs without changing the address, which the route guard can't see. While it's on:
+   - The very first touch movement is cancelled, so Safari never starts scrolling.
+   - Up/down movement is hidden from Instagram's own swipe code.
+   - At the end of an up/down gesture, the release is swallowed and Instagram is told the gesture was cancelled.
+
+   Wheel and arrow keys are blocked too. Taps, sideways swipes and Safari's back gesture still work. Stories, text fields, and scrolling panels that don't contain the video (like comments) are exempt.
+6. **Time limits:** see [Time limits](#time-limits). These are drawn on elements attached to `<html>`, outside Instagram's render tree, and styled from script so a Content Security Policy can't block them.
 
 **Why the header says `@inject-into auto` and `@grant none`:** the script needs no special APIs. With `auto`, Userscripts runs it in the page itself where it can, and falls back to an isolated content-script context if Instagram's Content Security Policy prevents that. In the isolated context, wrapping `history.pushState` can't see Instagram's own calls. The DOM observer and the poll catch those navigations instead, normally within a frame. `npm test` runs every scenario in both contexts.
 
@@ -172,10 +213,10 @@ Five layers, from fastest to most thorough:
 | `instagram-no-reels.meta.js` | Header only. The phone checks this for new versions. Generated by `npm run release`; don't edit. |
 | `scripts/release.mjs` | `npm run release -- "message"` |
 | `scripts/check.mjs` | `npm run check` |
-| `test/` | `npm test`: WebKit tests against a fake Instagram page |
+| `test/` | `npm test`: browser tests against a fake Instagram page |
 | `CHANGELOG.md` | Appended by the release script |
 | `instagram-no-reels-brief.md` | The original brief |
 
 ## Privacy
 
-This repo is public so the phone can fetch updates without logging in. It contains no personal data: no credentials, no account names, no cookies. Commits use GitHub's no-reply address. The script never makes a network request. Instagram login happens only in your own Safari.
+This repo is public so the phone can fetch updates without logging in. It contains no personal data: no credentials, no account names, no cookies. Commits use GitHub's no-reply address. The script never makes a network request. What it stores (one reel ID, and your time totals) stays in your browser on your device. Instagram login happens only in your own browser.

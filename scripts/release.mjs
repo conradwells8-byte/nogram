@@ -4,6 +4,9 @@
 //
 //   npm run release -- "fix nav selector"
 //
+// The first line of the message is the changelog entry and commit title; any
+// further lines go into the commit body only.
+//
 // No dependencies. Uses only Node built-ins and your local git.
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -24,6 +27,7 @@ const fail = (msg) => {
 // 1. Preconditions.
 const message = process.argv.slice(2).join(' ').trim();
 if (!message) fail('pass a message, e.g. npm run release -- "fix nav selector"');
+const [summary, ...body] = message.split('\n');
 
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
 if (branch !== 'main') fail(`you're on "${branch}", switch to main first`);
@@ -44,7 +48,7 @@ writeFileSync(META, headerOf(bumped) + '\n');
 
 // 4. Add a CHANGELOG entry (newest first, right under the title).
 const today = new Date().toISOString().slice(0, 10);
-const entry = `## ${next} - ${today}\n\n- ${message}\n`;
+const entry = `## ${next} - ${today}\n\n- ${summary.trim()}\n`;
 const log = readFileSync(CHANGELOG, 'utf8');
 const firstEntry = log.indexOf('\n## ');
 writeFileSync(
@@ -54,7 +58,7 @@ writeFileSync(
 
 // 5. Commit and push.
 git('add', '-A');
-git('commit', '-m', `v${next}: ${message}`);
+git('commit', '-m', `v${next}: ${summary.trim()}` + (body.length ? '\n' + body.join('\n') : ''));
 console.log(`Committed v${next}. Pushing...`);
 execFileSync('git', ['push', 'origin', 'main'], { cwd: root, stdio: 'inherit' });
 console.log(`\nReleased v${next}. On the phone: Safari > Userscripts popup > refresh > update.`);

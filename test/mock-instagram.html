@@ -20,11 +20,37 @@
   function render() {
     const p = location.pathname; let html = '<h1 id="page">' + p + '</h1>';
     if (p.startsWith('/direct/')) html += '<a id="dm-reel-a" href="/reel/AAA/">reel A</a> <a id="dm-reel-c" href="/reel/CCC/">reel C</a> <a id="dm-feed-reel" href="/reels/FFF/">feed-form reel</a><a id="abs-reels" href="https://www.instagram.com/reels/">abs</a>';
+    if (p.startsWith('/direct/')) html += '<button id="open-viewer" onclick="openViewer()">open reel pop-up</button>';
+    if (p.startsWith('/stories/')) html += '<video id="story-video" style="display:block;width:100%;height:100vh"></video>';
     if (p.startsWith('/reel/')) html += '<button id="swipe" onclick="nav(\'/reel/BBB/\')">swipe</button><button id="swipe-replace" onclick="nav(\'/reel/BBB/\', true)">swipe (replace)</button><button id="swipe-feed" onclick="nav(\'/reels/BBB/\')">swipe to feed url</button><a id="next-link" href="/reel/ZZZ/">next</a><a id="profile" href="/someone/">profile</a>';
-    if (p === '/') html += '<a id="content-reels" href="/reels/">see reels</a><a id="profile-tab" href="/someone/reels/"><svg aria-label="Reels" width="10" height="10"></svg>tab</a><button id="labelled-btn" aria-label="Reels">x</button>';
+    if (p === '/') html += '<article><video id="feed-video" style="display:block;width:100%;height:90vh"></video></article><a id="content-reels" href="/reels/">see reels</a><a id="profile-tab" href="/someone/reels/"><svg aria-label="Reels" width="10" height="10"></svg>tab</a><button id="labelled-btn" aria-label="Reels">x</button>';
     document.getElementById('app').innerHTML = html;
   }
   document.addEventListener('click', e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); nav(a.getAttribute('href')); });
   addEventListener('popstate', render);
+
+  // A reel pop-up over DMs that does NOT change the URL, with Instagram-style
+  // JS swipe handling (touch and pointer) and a scrollable comments panel.
+  window.ig = { touchSwipes: 0, pointerSwipes: 0, wheelSteps: 0, closed: 0, commentMoves: 0 };
+  function openViewer() {
+    const v = document.createElement('div');
+    v.id = 'viewer';
+    v.style.cssText = 'position:fixed;inset:0;background:#111;z-index:10';
+    v.innerHTML = '<video id="viewer-video" style="display:block;width:100%;height:100vh"></video>' +
+      '<div id="comments" style="position:absolute;left:0;right:0;bottom:0;height:150px;overflow:auto;background:#fff">' +
+      '<div style="height:1000px">comments</div></div>';
+    document.body.appendChild(v);
+    let sx = 0, sy = 0, px = 0, py = 0;
+    v.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; });
+    v.addEventListener('touchend', e => {
+      const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+      if (dy < -50) ig.touchSwipes++;
+      if (dx > 50) { ig.closed++; v.remove(); }
+    });
+    v.addEventListener('pointerdown', e => { px = e.clientX; py = e.clientY; });
+    v.addEventListener('pointerup', e => { if (e.clientY - py < -50) ig.pointerSwipes++; });
+    v.addEventListener('wheel', () => ig.wheelSteps++);
+    v.querySelector('#comments').addEventListener('touchmove', () => ig.commentMoves++);
+  }
   render();
 </script></body></html>
