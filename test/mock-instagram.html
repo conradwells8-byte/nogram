@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- Fake Instagram for test/run.mjs: just enough routes, links and history calls to exercise the userscript. -->
+<html><head><meta name="viewport" content="width=device-width"></head><body>
+<nav id="nav">
+  <a id="nav-home" href="/">Home</a>
+  <a id="nav-explore" href="/explore/">Explore</a>
+  <a id="nav-reels" href="/reels/"><svg aria-label="Reels" width="10" height="10"></svg></a>
+  <a id="nav-dm" href="/direct/inbox/">DMs</a>
+</nav>
+<main id="app"></main>
+<script>
+  // Mimic an isolated-world userscript when ?bypass=1: the app calls the prototype
+  // directly, so a wrapped history.pushState is never hit.
+  const BYPASS = sessionStorage.getItem('bypass') === '1';
+  function nav(path, replace) {
+    const fn = History.prototype[replace ? 'replaceState' : 'pushState'];
+    if (BYPASS) fn.call(history, {}, '', path); else history[replace ? 'replaceState' : 'pushState']({}, '', path);
+    render();
+  }
+  function render() {
+    const p = location.pathname; let html = '<h1 id="page">' + p + '</h1>';
+    if (p.startsWith('/direct/')) html += '<a id="dm-reel-a" href="/reel/AAA/">reel A</a> <a id="dm-reel-c" href="/reel/CCC/">reel C</a> <a id="dm-feed-reel" href="/reels/FFF/">feed-form reel</a><a id="abs-reels" href="https://www.instagram.com/reels/">abs</a>';
+    if (p.startsWith('/reel/')) html += '<button id="swipe" onclick="nav(\'/reel/BBB/\')">swipe</button><button id="swipe-replace" onclick="nav(\'/reel/BBB/\', true)">swipe (replace)</button><button id="swipe-feed" onclick="nav(\'/reels/BBB/\')">swipe to feed url</button><a id="next-link" href="/reel/ZZZ/">next</a><a id="profile" href="/someone/">profile</a>';
+    if (p === '/') html += '<a id="content-reels" href="/reels/">see reels</a><a id="profile-tab" href="/someone/reels/"><svg aria-label="Reels" width="10" height="10"></svg>tab</a><button id="labelled-btn" aria-label="Reels">x</button>';
+    document.getElementById('app').innerHTML = html;
+  }
+  document.addEventListener('click', e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); nav(a.getAttribute('href')); });
+  addEventListener('popstate', render);
+  render();
+</script></body></html>

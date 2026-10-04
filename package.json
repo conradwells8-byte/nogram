@@ -1,0 +1,15 @@
+{
+  "name": "nogram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal userscript: Instagram on the web without Reels browsing.",
+  "type": "module",
+  "scripts": {
+    "release": "node scripts/release.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "node test/run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
