@@ -1,6 +1,6 @@
 # NOGRAM
 
-Personal userscript that makes Instagram on the web usable without Reels: hides the Reels button, redirects `/reels/`, lets single reels from DMs play but blocks moving to the next one, locks up/down scrolling while a full-screen video is on screen, and adds an entry countdown, an on-screen timer and a per-sitting time limit. Runs on iPhone Safari via the **Userscripts** app (quoid), and on desktop (Arc/Chrome) via Violentmonkey.
+Personal userscript that makes Instagram on the web usable without Reels: hides the Reels button, redirects `/reels/`, lets single reels from DMs play but blocks moving to the next one, locks up/down scrolling while a full-screen video is on screen, adds an entry countdown, an on-screen timer and a per-sitting time limit, and caps the home feed at N posts per cooldown window. Runs on iPhone Safari via the **Userscripts** app (quoid), and on desktop (Arc/Chrome) via Violentmonkey.
 
 The original requirements are in `instagram-no-reels-brief.md`. User-facing docs are in `README.md`.
 
@@ -24,7 +24,7 @@ Every change that should reach the phone **must** go through `npm run release`, 
 - Every fragile value (selectors, path regexes, timings, thresholds) lives in `CONFIG`. Keep it that way, so most Instagram breakages are a one-line fix.
 - Match on `href`, `aria-label` and semantic elements (`article`, `video`). Never use Instagram's obfuscated class names.
 - No network requests, external libraries or analytics. `check.mjs` enforces this.
-- Storage: `sessionStorage` holds the allowed reel ID; `localStorage` key `nogram.time` holds the time-limit state. Nothing else.
+- Storage: `sessionStorage` holds the allowed reel ID. In `localStorage`, `nogram.time` holds the time-limit state and `nogram.feed` holds the feed-cap state (counted post IDs + last-counted time). Nothing else.
 - Keep code commented and auditable; the user reads every line.
 - The script must work in both injection contexts. In the page context, wrapping `history.pushState` works. In the isolated content-script context (possible under Userscripts `@inject-into auto`), it doesn't, and the DOM observer plus the 250 ms poll catch navigation instead. The tests run both.
 - At `document-start`, `document.documentElement` can be null. Guard every access to it.
@@ -55,6 +55,7 @@ The repo is public (github.com/conradwells8-byte/nogram) so the phone can fetch 
 - Mobile web's Explore button is the way into Search, so `/explore/` redirects to `/explore/search/`.
 - Reels opened from DMs may play as a pop-up without changing the URL. The video lock is designed to cover this from what's on screen: a `<video>` at least 75% of the viewport height that isn't inside an `<article>`.
 - The desktop Instagram layout hasn't been tuned. If something misbehaves there, consider detecting desktop and handling it separately.
+- Feed cap: assumes feed posts are `<article>` elements with a `/p/<id>/` (or `/reel/<id>/`) link, and that the home feed is `/`. It hides posts past the cap with `visibility` and undoes any scroll past the first hidden one. That works for both document and inner-element scrollers, but iOS momentum scrolling against the clamp hasn't been tried on a real device.
 - WebKit doesn't allow `new Touch()`/`new TouchEvent()`. The gesture cancel sent to Instagram therefore relies on `pointercancel`; `touchcancel` is a best-effort extra.
 
 Open question for the user: the "Time's up" lockout currently lasts `NEW_SITTING_AFTER_AWAY_MIN` (5 minutes). They may want it longer.

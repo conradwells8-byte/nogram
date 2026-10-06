@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NOGRAM: Instagram without Reels
 // @namespace    https://github.com/conradwells8-byte/nogram
-// @version      1.0.1
-// @description  Instagram on the web, minus Reels browsing, plus a timer, an entry countdown and a time limit. Single reels sent in DMs still open; swiping to the next one doesn't.
+// @version      1.0.2
+// @description  Instagram on the web, minus Reels browsing, plus a timer, an entry countdown, a time limit and a cap on home-feed posts. Single reels sent in DMs still open; swiping to the next one doesn't.
 // @match        https://www.instagram.com/*
 // @run-at       document-start
 // @inject-into  auto
@@ -16,7 +16,8 @@
  * NOGRAM: personal userscript. No network requests, no libraries, no analytics.
  * Stored on this device only:
  *   - sessionStorage: the ID of the one reel you're currently allowed to watch
- *   - localStorage:   time spent (this sitting, today) for the timer and limits
+ *   - localStorage:   time spent (this sitting, today) for the timer and limits,
+ *                     and the IDs of home-feed posts counted towards the feed cap
  *
  * How it works, in layers:
  *   1. CSS injected at document-start hides the Reels nav button before it can paint.
@@ -26,6 +27,7 @@
  *   5. A video lock: while a reel (or any full-screen video) is on screen, up/down
  *      scrolling and swiping are blocked from the first pixel.
  *   6. Time limits: an entry countdown, an on-screen timer and a "Time's up" screen.
+ *   7. Feed cap: only N posts on the home feed, then a cooldown.
  *
  * If Instagram changes its markup, almost every fix is a one-line edit in CONFIG below.
  */
@@ -65,6 +67,8 @@
       EXPLORE: /^\/explore(\/|$)/,
       // ...except these, which are search and its results.
       EXPLORE_ALLOWED: /^\/explore\/(search|tags|locations)(\/|$)/,
+      // The home feed (where the feed cap applies).
+      HOME_FEED: /^\/$/,
       // Where the video lock never applies (stories have their own swipe-down-to-close).
       NO_VIDEO_LOCK: /^\/stories\//,
     },
@@ -123,12 +127,30 @@
       TIMER_CSS: 'top: calc(env(safe-area-inset-top, 0px) + 4px); left: 50%; transform: translateX(-50%);',
     },
 
+    // --- Feed cap -------------------------------------------------------------
+    // On the home feed you get POSTS posts, then no more. A post counts the
+    // moment its top edge scrolls into view. Posts past the cap are hidden and
+    // you can't scroll to them (you can still scroll back up, and use the rest
+    // of the app). The allowance refills COOLDOWN_MIN minutes after the last
+    // post you were allowed to see: so 20 posts then 10 minutes off, or leave
+    // the feed alone for 10 minutes and you start again from 0.
+    FEED_CAP: {
+      ENABLED: true,
+      POSTS: 20,
+      COOLDOWN_MIN: 10,
+      POST_SELECTOR: 'article', // one feed post
+      // Where the "That's 20 posts" note sits. Plain CSS; it never blocks taps.
+      NOTICE_CSS: 'bottom: calc(env(safe-area-inset-bottom, 0px) + 72px); left: 50%; transform: translateX(-50%);',
+    },
+
     // --- Timings ------------------------------------------------------------
     POLL_MS: 250, // fallback check of location.pathname
 
     // --- Internals ----------------------------------------------------------
     STORAGE_KEY: 'nogram.allowedReelId', // sessionStorage: the reel you may watch
     TIME_STORAGE_KEY: 'nogram.time', // localStorage: time spent (see TIME)
+    FEED_STORAGE_KEY: 'nogram.feed', // localStorage: posts counted (see FEED_CAP)
+    CAPPED_ATTR: 'data-nogram-capped', // on feed posts hidden by the cap
     HTML_CLASS_ON_REEL: 'nogram-on-reel', // added to <html> while on a single reel
     STYLE_ID: 'nogram-style',
     HIDDEN_ATTR: 'data-nogram-hidden',
@@ -406,6 +428,7 @@
     ensureStyle();
     syncReelClass();
     if (CONFIG.TIME.ENABLED) render(timeState, Date.now()); // re-attach if a re-render removed it
+    if (CONFIG.FEED_CAP.ENABLED) updateFeed(); // count/hide newly loaded feed posts
     document.querySelectorAll(hideSelectors().join(',')).forEach(hideElement);
 
     CONFIG.HIDE_ARIA_LABELS.forEach(function (label) {
@@ -770,7 +793,12 @@
     if (blocking) pauseAllVideos();
 
     timer.style.display = TIME.SHOW_TIMER && !blocking ? 'block' : 'none';
-    timer.textContent = clock(s.sittingMs) + ' · ' + hoursMinutes(s.dayMs) + ' today';
+    timer.textContent =
+      clock(s.sittingMs) +
+      ' · ' +
+      hoursMinutes(s.dayMs) +
+      ' today' +
+      (CONFIG.FEED_CAP.ENABLED && onHomeFeed() ? ' · ' + feedCount() + '/' + CONFIG.FEED_CAP.POSTS : '');
     const warn = LIMIT_MS > 0 && LIMIT_MS - s.sittingMs <= TIME.WARN_LAST_MIN * MINUTE;
     timer.style.background = warn ? 'rgba(214,120,0,0.9)' : 'rgba(0,0,0,0.6)';
   }
@@ -793,6 +821,201 @@
     // Coming back to the tab: re-check straight away (it may be a new sitting).
     document.addEventListener('visibilitychange', tick);
     setInterval(tick, 1000);
+  }
+
+  // ===========================================================================
+  // Feed cap: FEED_CAP.POSTS posts on the home feed, then a cooldown.
+  // Posts past the cap are hidden with `visibility` (not `display`), so the
+  // page doesn't shrink and Instagram isn't prompted to keep loading more.
+  // ===========================================================================
+  const FEED = CONFIG.FEED_CAP;
+  const FEED_COOLDOWN_MS = FEED.COOLDOWN_MIN * 60 * 1000;
+
+  // The saved state:
+  //   seen        : IDs of the posts counted so far (so none is counted twice)
+  //   lastCounted : when the most recent one was counted
+  let feedState = { seen: [], lastCounted: 0 };
+
+  function loadFeed() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CONFIG.FEED_STORAGE_KEY));
+      if (saved && Array.isArray(saved.seen)) feedState = saved;
+    } catch (e) {
+      /* unavailable or corrupt: keep the in-memory copy */
+    }
+    // Refill COOLDOWN_MIN after the last counted post.
+    if (feedState.seen.length && Date.now() - feedState.lastCounted >= FEED_COOLDOWN_MS) {
+      log('feed allowance refilled');
+      feedState = { seen: [], lastCounted: 0 };
+      saveFeed();
+    }
+    return feedState;
+  }
+  function saveFeed() {
+    try {
+      localStorage.setItem(CONFIG.FEED_STORAGE_KEY, JSON.stringify(feedState));
+    } catch (e) {
+      /* unavailable: in-memory only */
+    }
+  }
+
+  function onHomeFeed() {
+    return CONFIG.PATHS.HOME_FEED.test(location.pathname);
+  }
+
+  // A post's ID from its permalink (/p/<id>/ or /reel/<id>/). Posts without one
+  // get an ID for this page load only, so they're still counted once.
+  const fallbackIds = new WeakMap();
+  let fallbackSeq = 0;
+  function postId(post) {
+    const link = post.querySelector('a[href*="/p/"], a[href*="/reel/"]');
+    const m = link && /\/(?:p|reel)\/([A-Za-z0-9_-]+)/.exec(link.getAttribute('href'));
+    if (m) return m[1];
+    if (!fallbackIds.has(post)) fallbackIds.set(post, '#' + ++fallbackSeq);
+    return fallbackIds.get(post);
+  }
+
+  function setCapped(post, capped) {
+    if (capped === post.hasAttribute(CONFIG.CAPPED_ATTR)) return;
+    if (capped) {
+      post.setAttribute(CONFIG.CAPPED_ATTR, '');
+      post.style.setProperty('visibility', 'hidden', 'important');
+      post.querySelectorAll('video').forEach(function (v) {
+        v.pause();
+      });
+    } else {
+      post.removeAttribute(CONFIG.CAPPED_ATTR);
+      post.style.removeProperty('visibility');
+    }
+  }
+
+  // While capped: the first hidden post. Scrolling stops just above it.
+  let feedWall = null;
+
+  function updateFeed() {
+    feedWall = null;
+    if (!onHomeFeed()) {
+      // Left the feed: put back anything we hid, hide the note.
+      document.querySelectorAll('[' + CONFIG.CAPPED_ATTR + ']').forEach(function (post) {
+        setCapped(post, false);
+      });
+      renderFeedNotice(null);
+      return;
+    }
+    const s = loadFeed();
+    let capped = s.seen.length >= FEED.POSTS;
+    let changed = false;
+    // Nothing counts while the countdown / "Time's up" screen covers the feed.
+    const counting = !blocking;
+
+    document.querySelectorAll(FEED.POST_SELECTOR).forEach(function (post) {
+      const id = postId(post);
+      if (s.seen.indexOf(id) !== -1) return setCapped(post, false); // already counted
+      if (!capped && counting && post.getBoundingClientRect().top < window.innerHeight) {
+        // Its top edge just scrolled into view: count it.
+        s.seen.push(id);
+        s.lastCounted = Date.now();
+        changed = true;
+        capped = s.seen.length >= FEED.POSTS;
+        log('feed post ' + s.seen.length + '/' + FEED.POSTS, id);
+        return setCapped(post, false);
+      }
+      setCapped(post, capped);
+      if (capped && !feedWall) feedWall = post;
+    });
+
+    if (changed) {
+      feedState = s;
+      saveFeed();
+    }
+    if (feedWall) holdAtWall();
+    renderFeedNotice(capped ? s : null);
+  }
+
+  // Undo any scroll that brought the first hidden post into view.
+  function holdAtWall() {
+    const overshoot = window.innerHeight - feedWall.getBoundingClientRect().top;
+    if (overshoot <= 0) return;
+    const scroller = scrollableAncestor(feedWall);
+    if (scroller) scroller.scrollTop -= overshoot;
+    else window.scrollBy(0, -overshoot);
+  }
+  function atWall() {
+    return feedWall !== null && feedWall.isConnected && feedWall.getBoundingClientRect().top - window.innerHeight < 2;
+  }
+
+  let feedNotice = null;
+  function renderFeedNotice(s) {
+    if (!s) {
+      if (feedNotice) feedNotice.style.display = 'none';
+      return;
+    }
+    const root = document.documentElement;
+    if (!root) return;
+    if (!feedNotice) {
+      feedNotice = makeEl(
+        'position: fixed; z-index: 2147483646; pointer-events: none; padding: 8px 14px;' +
+          'border-radius: 999px; background: rgba(0,0,0,0.8); color: #fff; white-space: nowrap;' +
+          'font: 600 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;' +
+          'font-variant-numeric: tabular-nums;' +
+          FEED.NOTICE_CSS
+      );
+    }
+    if (!feedNotice.isConnected) root.appendChild(feedNotice);
+    feedNotice.style.display = 'block';
+    feedNotice.textContent =
+      "That's " + FEED.POSTS + ' posts. More in ' + clock(s.lastCounted + FEED_COOLDOWN_MS - Date.now()) + '.';
+  }
+
+  /** Posts counted so far, for the timer pill. */
+  function feedCount() {
+    return feedState.seen.length;
+  }
+
+  if (FEED.ENABLED) {
+    // Re-check on every scroll (inner scrollers too: capture catches them),
+    // batched to once per frame.
+    let feedScheduled = false;
+    window.addEventListener(
+      'scroll',
+      function () {
+        if (feedScheduled) return;
+        feedScheduled = true;
+        requestAnimationFrame(function () {
+          feedScheduled = false;
+          updateFeed();
+        });
+      },
+      { capture: true, passive: true }
+    );
+    // At the wall, stop the downward scroll before it starts.
+    let feedTouchY = 0;
+    window.addEventListener(
+      'touchstart',
+      function (e) {
+        if (e.touches.length === 1) feedTouchY = e.touches[0].clientY;
+      },
+      { capture: true, passive: true }
+    );
+    window.addEventListener(
+      'touchmove',
+      function (e) {
+        if (e.touches.length !== 1 || !atWall()) return;
+        const y = e.touches[0].clientY;
+        if (y < feedTouchY && e.cancelable) e.preventDefault(); // finger moving up = scrolling down
+        feedTouchY = y;
+      },
+      active
+    );
+    window.addEventListener(
+      'wheel',
+      function (e) {
+        if (e.deltaY > 0 && atWall()) e.preventDefault();
+      },
+      active
+    );
+    // Keeps the "More in m:ss" note ticking and notices the refill.
+    setInterval(updateFeed, 1000);
   }
 
   // ===========================================================================

@@ -10,8 +10,9 @@ Instagram on the web (iPhone Safari), minus Reels browsing.
   - a 10-second countdown before Instagram appears,
   - a small timer at the top showing this sitting and today's total,
   - a "Time's up" screen after 30 minutes in one sitting.
+- **Feed cap** (optional, on by default): 20 posts on the home feed, then no more for 10 minutes.
 
-Everything else (feed, stories, profiles, posts, DMs, search, notifications) is untouched. It's one userscript, [`instagram-no-reels.user.js`](instagram-no-reels.user.js), with no network requests, no libraries and no analytics. It stores two things, both only on your device: the ID of the reel you're currently watching (`sessionStorage`, gone when the tab closes) and your time on Instagram (`localStorage`, see [Time limits](#time-limits)).
+Everything else (feed, stories, profiles, posts, DMs, search, notifications) is untouched. It's one userscript, [`instagram-no-reels.user.js`](instagram-no-reels.user.js), with no network requests, no libraries and no analytics. It stores two things, both only on your device: the ID of the reel you're currently watching (`sessionStorage`, gone when the tab closes) and, in `localStorage`, your time on Instagram (see [Time limits](#time-limits)) and the IDs of the feed posts counted towards the [feed cap](#feed-cap).
 
 **Install link (open this on the iPhone in Safari):**
 https://raw.githubusercontent.com/conradwells8-byte/nogram/main/instagram-no-reels.user.js
@@ -55,6 +56,30 @@ All the numbers are in `CONFIG.TIME` at the top of the script:
 | `TIMER_CSS` | top centre | Where the pill sits (plain CSS) |
 
 The times are saved in `localStorage` on instagram.com (key `nogram.time`), so they survive closing the tab. They never leave your device. Instagram's own code could technically read that key, but it only holds timings, which Instagram already knows. Each browser keeps its own count, so Safari on iPhone and Arc on the Mac are tracked separately.
+
+---
+
+## Feed cap
+
+The home feed gives you **20 posts**, then stops.
+
+- A post counts as soon as its top edge scrolls onto the screen. The timer pill shows your count on the home feed, e.g. `· 7/20`.
+- Each post is counted once, by its ID. Scrolling back up or reloading doesn't use up more.
+- At 20, every post you haven't seen is hidden and you can't scroll down any further. A note at the bottom says **That's 20 posts. More in 9:41.**
+- You can still scroll back up through your 20, and stories, DMs, search and profiles all work as normal.
+- The allowance refills **10 minutes after the last post you were allowed to see**. So it's 20 posts, then 10 minutes off. If you scroll 8 posts and leave the feed alone for 10 minutes, you start again from 0.
+
+The settings are in `CONFIG.FEED_CAP`:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ENABLED` | `true` | Turns the feed cap on or off |
+| `POSTS` | `20` | Posts per allowance |
+| `COOLDOWN_MIN` | `10` | Minutes after the last counted post before the allowance refills |
+| `POST_SELECTOR` | `article` | What counts as one feed post |
+| `NOTICE_CSS` | bottom centre | Where the note sits (plain CSS) |
+
+If you'd rather have a plain time limit instead, set `FEED_CAP.ENABLED: false` and lower `TIME.SESSION_LIMIT_MIN` (e.g. to `5`).
 
 ---
 
@@ -147,6 +172,7 @@ Run through this after every change, on desktop (iPhone viewport) and then on th
 - [ ] **Countdown** shows when you open Instagram fresh, but not when you reload straight away.
 - [ ] **Timer** pill is visible at the top and counting. It doesn't cover anything you need to tap.
 - [ ] **Time's up** appears at the limit. To test without waiting 30 minutes, set `SESSION_LIMIT_MIN: 1` on desktop.
+- [ ] **Feed cap.** The pill counts up as you scroll the home feed. At 20, you can't scroll further, nothing past it is visible, and the note shows a countdown. You can still scroll back up. To test quickly, set `FEED_CAP.POSTS: 3` on desktop.
 
 ---
 
@@ -164,6 +190,8 @@ Instagram changes its markup regularly. Symptoms and fixes:
 | Feed won't scroll over a video | A feed video is being mistaken for a reel | Raise `VIEWER_VIDEO_MIN_HEIGHT`, or check `FEED_POST_SELECTOR` still matches feed posts |
 | Can't scroll something inside a reel | It needs to be exempt from the video lock | Add a selector for it to `VIDEO_LOCK_EXEMPT` |
 | Timer covers a button | Instagram's header changed | `TIME.TIMER_CSS` (e.g. move it to `bottom: 70px`) |
+| Feed cap never triggers, or the count stays at 0 | Feed posts aren't `<article>` elements any more | `FEED_CAP.POST_SELECTOR` |
+| Feed cap counts on the wrong page | The home feed's URL changed | `PATHS.HOME_FEED` |
 | A swipe flashes the next reel for too long | Detection is slow | Lower `POLL_MS` (e.g. `100`) |
 
 **How to see what changed:**
@@ -179,7 +207,7 @@ Instagram changes its markup regularly. Symptoms and fixes:
 
 ## How it works
 
-Six layers:
+Seven layers:
 
 1. **CSS at `document-start`** hides the bare Reels feed link (`a[href="/reels/"]` and variants) before the page can paint it.
 2. **A `MutationObserver`** re-applies the hiding (and an `aria-label="Reels"` fallback) every time Instagram re-renders, batched to once per animation frame. The same pass also sets `display: none` inline via script, which works even if a Content Security Policy were ever to block the `<style>` tag.
@@ -192,6 +220,7 @@ Six layers:
 
    Wheel and arrow keys are blocked too. Taps, sideways swipes and Safari's back gesture still work. Stories, text fields, and scrolling panels that don't contain the video (like comments) are exempt.
 6. **Time limits:** see [Time limits](#time-limits). These are drawn on elements attached to `<html>`, outside Instagram's render tree, and styled from script so a Content Security Policy can't block them.
+7. **Feed cap:** see [Feed cap](#feed-cap). It works by counting `article` elements as they scroll into view on `/`. Once the cap is reached, posts not yet seen are hidden with `visibility: hidden` rather than `display: none`, so the page doesn't shrink and Instagram isn't prompted to keep loading more. Any scroll that brings the first hidden post into view is undone straight away, and on a touch screen the downward drag is cancelled before it starts.
 
 **Why the header says `@inject-into auto` and `@grant none`:** the script needs no special APIs. With `auto`, Userscripts runs it in the page itself where it can, and falls back to an isolated content-script context if Instagram's Content Security Policy prevents that. In the isolated context, wrapping `history.pushState` can't see Instagram's own calls. The DOM observer and the poll catch those navigations instead, normally within a frame. `npm test` runs every scenario in both contexts.
 
@@ -219,4 +248,4 @@ Six layers:
 
 ## Privacy
 
-This repo is public so the phone can fetch updates without logging in. It contains no personal data: no credentials, no account names, no cookies. Commits use GitHub's no-reply address. The script never makes a network request. What it stores (one reel ID, and your time totals) stays in your browser on your device. Instagram login happens only in your own browser.
+This repo is public so the phone can fetch updates without logging in. It contains no personal data: no credentials, no account names, no cookies. Commits use GitHub's no-reply address. The script never makes a network request. What it stores (one reel ID, your time totals, and the IDs of up to 20 feed posts) stays in your browser on your device. Instagram login happens only in your own browser.

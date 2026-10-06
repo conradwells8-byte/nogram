@@ -24,6 +24,8 @@
     if (p.startsWith('/stories/')) html += '<video id="story-video" style="display:block;width:100%;height:100vh"></video>';
     if (p.startsWith('/reel/')) html += '<button id="swipe" onclick="nav(\'/reel/BBB/\')">swipe</button><button id="swipe-replace" onclick="nav(\'/reel/BBB/\', true)">swipe (replace)</button><button id="swipe-feed" onclick="nav(\'/reels/BBB/\')">swipe to feed url</button><a id="next-link" href="/reel/ZZZ/">next</a><a id="profile" href="/someone/">profile</a>';
     if (p === '/') html += '<article><video id="feed-video" style="display:block;width:100%;height:90vh"></video></article><a id="content-reels" href="/reels/">see reels</a><a id="profile-tab" href="/someone/reels/"><svg aria-label="Reels" width="10" height="10"></svg>tab</a><button id="labelled-btn" aria-label="Reels">x</button>';
+    // Home feed: 30 posts, each with a /p/<id>/ permalink like Instagram's.
+    if (p === '/') for (let i = 1; i <= 30; i++) html += '<article class="post" id="post' + i + '" style="height:600px;border-top:1px solid #ccc"><a href="/p/POST' + i + '/">post ' + i + '</a></article>';
     document.getElementById('app').innerHTML = html;
   }
   document.addEventListener('click', e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); nav(a.getAttribute('href')); });

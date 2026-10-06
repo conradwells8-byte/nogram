@@ -15,8 +15,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 
 const FULL_SRC = fs.readFileSync(new URL('../instagram-no-reels.user.js', import.meta.url), 'utf8');
-// Route/lock tests run without the time limits (the countdown would cover the page).
-const SRC = FULL_SRC.replace('ENABLED: true', 'ENABLED: false');
+// Route/lock tests run without the time limits or feed cap (the countdown would
+// cover the page; the cap would stop scrolling on the home feed).
+const SRC = FULL_SRC.replaceAll('ENABLED: true', 'ENABLED: false');
 const MOCK = fs.readFileSync(new URL('./mock-instagram.html', import.meta.url));
 // Every path serves the same single-page app, like Instagram does.
 const server = http.createServer((req, res) => {
@@ -171,7 +172,8 @@ async function lockTests() {
 
 async function timeTests() {
   console.log('\n== time limits (sped up: 2s countdown, 3.6s limit, 3s away = new sitting)');
-  const src = FULL_SRC.replace('GATE_SECONDS: 10', 'GATE_SECONDS: 2')
+  const src = FULL_SRC.replace(/FEED_CAP: \{\n(\s*)ENABLED: true/, 'FEED_CAP: {\n$1ENABLED: false')
+    .replace('GATE_SECONDS: 10', 'GATE_SECONDS: 2')
     .replace('SESSION_LIMIT_MIN: 30', 'SESSION_LIMIT_MIN: 0.06')
     .replace('NEW_SITTING_AFTER_AWAY_MIN: 5', 'NEW_SITTING_AFTER_AWAY_MIN: 0.05');
   const browser = await webkit.launch();
@@ -216,6 +218,66 @@ async function timeTests() {
   await browser.close();
 }
 
+async function feedTests() {
+  console.log('\n== feed cap (sped up: 5 posts, 3s cooldown)');
+  const src = FULL_SRC.replace(/TIME: \{\n(\s*)ENABLED: true/, 'TIME: {\n$1ENABLED: false')
+    .replace('POSTS: 20', 'POSTS: 5')
+    .replace('COOLDOWN_MIN: 10', 'COOLDOWN_MIN: 0.05');
+  const browser = await webkit.launch();
+  const ctx = await browser.newContext({ ...devices['iPhone 14'] });
+  await ctx.addInitScript(src);
+  const page = await ctx.newPage();
+  const state = () => page.evaluate(() => {
+    const posts = [...document.querySelectorAll('article')];
+    const hidden = posts.filter((p) => getComputedStyle(p).visibility === 'hidden');
+    const note = [...document.documentElement.children].find((e) => / posts\. More in /.test(e.textContent || '') && e.style.display !== 'none');
+    const saved = JSON.parse(localStorage.getItem('nogram.feed') || '{"seen":[]}');
+    return {
+      count: saved.seen.length,
+      hidden: hidden.length,
+      note: note ? note.textContent : null,
+      wallTop: hidden[0] ? Math.round(hidden[0].getBoundingClientRect().top) : null,
+      vh: innerHeight,
+      scrollY: Math.round(scrollY),
+    };
+  });
+  const scrollLots = async (dy, times) => {
+    for (let i = 0; i < times; i++) { await page.evaluate((dy) => window.scrollBy(0, dy), dy); await page.waitForTimeout(40); }
+    await settle(page);
+  };
+
+  await page.goto(B + '/'); await settle(page);
+  let st = await state();
+  check('feed: posts already in view are counted', st.count >= 1 && st.count < 5, JSON.stringify(st));
+  check('feed: nothing hidden before the cap', st.hidden === 0 && st.note === null, JSON.stringify(st));
+  await scrollLots(400, 40);
+  st = await state();
+  check('feed: stops counting at the cap', st.count === 5, JSON.stringify(st));
+  check('feed: posts past the cap are hidden', st.hidden > 0, JSON.stringify(st));
+  check('feed: scroll held above the first hidden post', st.wallTop !== null && st.wallTop >= st.vh - 2, JSON.stringify(st));
+  check('feed: note says "That\'s 5 posts. More in …"', /^That's 5 posts\. More in 0:0\d\.$/.test(st.note || ''), JSON.stringify(st));
+  const before = st.scrollY;
+  await scrollLots(-300, 3);
+  check('feed: can still scroll back up', (await state()).scrollY < before);
+
+  await page.reload(); await settle(page);
+  await scrollLots(400, 40);
+  st = await state();
+  check('feed: reload keeps the cap (no recount)', st.count === 5 && st.hidden > 0 && st.wallTop >= st.vh - 2, JSON.stringify(st));
+
+  await page.goto(B + '/direct/inbox/'); await settle(page);
+  check('feed: no note away from the home feed', (await state()).note === null);
+
+  await page.waitForTimeout(3200);
+  await page.goto(B + '/'); await settle(page);
+  st = await state();
+  check('feed: allowance refills after the cooldown', st.hidden === 0 && st.note === null && st.count < 5, JSON.stringify(st));
+  await scrollLots(400, 40);
+  st = await state();
+  check('feed: capped again after another 5', st.count === 5 && st.hidden > 0, JSON.stringify(st));
+  await browser.close();
+}
+
 await run('page context (wrapped pushState)');
 await run('isolated context (pushState bypass -> poll/DOM fallbacks)', { bypass: true });
 {
@@ -235,6 +297,7 @@ await run('isolated context (pushState bypass -> poll/DOM fallbacks)', { bypass:
 }
 await lockTests();
 await timeTests();
+await feedTests();
 server.close();
 console.log(`\n${pass} passed, ${failn} failed`);
 process.exit(failn ? 1 : 0);
